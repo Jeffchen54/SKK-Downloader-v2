@@ -108,19 +108,18 @@ class ThreadPool():
     # Download task queue, Contains tuples in the structure: (func(),(args1,args2,...))
     __task_queue:Kill_Queue
     __threads:list  # List of threads in the threadpool
-
+    __tcount:int    # Number of threads
     def __init__(self, tcount:int) -> None:
         """
-        Initializes a threadpool and starts the threads
+        Initializes a threadpool
 
         Param:
             tcount: Number of threads for the threadpool
         """
         self.__task_queue = Kill_Queue()
-        self.__threads = self.__create_threads(tcount)
-        tname.name = "main"
+        self.__tcount = tcount
     
-    def __create_threads(self, count: int) -> list:
+    def start_threads(self) -> None:
         """
         Creates count number of downThreads and starts it
 
@@ -128,13 +127,12 @@ class ThreadPool():
             count: how many threads to create
         Return: Threads
         """
-        threads = []
+        self.__threads = []
         # Spawn threads
-        for i in range(0, count):
-            threads.append(ThreadPool.TaskThread(i, self.__task_queue))
-            threads[i].start()
-        logging.debug(str(count) + " threads have been started")
-        return threads
+        for i in range(0, self.__tcount):
+            self.__threads.append(ThreadPool.TaskThread(i, self.__task_queue))
+            self.__threads[i].start()
+        logging.debug(str(self.__tcount) + " threads have been started")
     
     def kill_threads(self) -> None:
         """

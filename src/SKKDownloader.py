@@ -5,6 +5,7 @@ import os
 from re import L
 import sys
 import time
+from typing import Dict
 from bs4 import BeautifulSoup
 import requests
 from tqdm import tqdm
@@ -16,17 +17,6 @@ from Threadpool import tname
 Redesign of ImageOpener without the use of Selenium and HandyImage
 """
 
-# Threading Variables #####################################################
-POST_PREFIX = 'https://chan.sankakucomplex.com/'
-DATA_PREFIX = 'https:'
-LOG_PATH = r'c:/Users/chenj/Downloads/SKK-Downloader-v2/src/logs/'
-BLACK_PATH =  r'c:/Users/chenj/Downloads/SKK-Downloader-v2/src/logs/'
-fcount = 0  # Used to count and rename content
-fcount_mutex = Lock()   # Mutex for fcount
-failed = 0
-failed_mutex = Lock()
-headers = {
-    'User-agent': 'Mozilla/5.0 (Windows NT 5.1; rv:43.0) Gecko/20100101 Firefox/43.0'}
 
 
 class Error(Exception):
@@ -40,6 +30,10 @@ class UnknownURLTypeException(Error):
 
 
 class SKK():
+    """
+    Main SKK downloader class. Offers multithreaded downloading for Sankaku tags
+    """
+    # Instance variables
     __url: str           # URL to Download
     __lastAddedID: str   # Last added postID
     __cookie: dict        # Sankaku Cookie
@@ -54,6 +48,21 @@ class SKK():
     __logn_mutex = Lock()
     __blackn_mutex = Lock()
     __thpl:ThreadPool   # Threadpool for downloading files
+
+    # Threading Variables #####################################################
+    __POST_PREFIX = 'https://chan.sankakucomplex.com/'
+    __DATA_PREFIX = 'https:'
+    __LOG_PATH = sys.path[0] + r'/logs/'
+    __BLACK_PATH =  sys.path[0] + r'/logs/'
+    __fcount = 0  # Used to count and rename content
+    __fcount_mutex = Lock()   # Mutex for fcount
+    __failed = 0
+    __failed_mutex = Lock()
+    __skipped_mutex = Lock()
+    __skipped = 0
+    __headers = {
+        'User-agent': 'Mozilla/5.0 (Windows NT 5.1; rv:43.0) Gecko/20100101 Firefox/43.0'}
+
 
     def __init__(self, tcount: int | None, chunksz: int | None,  blacklist: str | None,  max_retries: int|None, cookie: dict, download_path: str) -> None:
         """
@@ -93,10 +102,10 @@ class SKK():
             self.__blacklist = None
 
         # Misc
-        self.__logn = LOG_PATH + "link - " + \
+        self.__logn = self.__LOG_PATH + "link - " + \
             str(int(time.monotonic())) + ".txt"
         tname.name = "main"
-        self.__blackn = BLACK_PATH + "Blacklist - " + \
+        self.__blackn = self.__BLACK_PATH + "Blacklist - " + \
             str(int(time.monotonic())) + ".txt"
 
         # Tcount
@@ -123,7 +132,7 @@ class SKK():
 
         self.__url = url
 
-    def run(self, segmented: bool, initial_skips: int) -> None:
+    def run(self, segmented: bool, initial_skips: int) -> Dict:
         """
         KMP runner function. 
         Given a link with tabs, download all images with the tags
@@ -133,31 +142,38 @@ class SKK():
             segmented: True to download in parts, false to download immediately.
                     It is recommended to download in parts
         Pre: set_url has been called
+        Return: dict in the structure {"downloaded":int, "failed":int, "skipped":int}
         """
         assert(self.__url) 
+        self.__thpl = ThreadPool(self.__tcount)
         if segmented:
-            self.__thpl = ThreadPool(self.__tcount)
+            self.__thpl.start_threads()
             self.__process_container_in_segments(initial_skips)
         else:
             self.__process_container(initial_skips)
-            self.__thpl = ThreadPool(self.__tcount)
+            self.__thpl.start_threads()
 
         # Close threads
         self.__thpl.join_queue()
         self.__thpl.kill_threads()
-        logging.info("Files downloaded: " + str(fcount))
-        logging.info("Files failed: " + str(failed) +
+        logging.debug("Files downloaded: " + str(self.__fcount))
+        logging.debug("Files failed: " + str(self.__failed) +
                      " stored in " + self.__logn)
+        logging.debug("Files skipped: " + str(self.__skipped))
 
-    def run_post_links(self, lname: str):
+        return {"downloaded":self.__fcount, "failed":self.__failed, "skipped":self.__skipped}
+
+    def run_post_links(self, lname: str) -> Dict:
         """
         KMP runner function
         Downloads all post from a file containing links
 
         Param: 
             lname: file containing sankaku post links
+        Return: dict in the structure {"downloaded":int, "failed":int, "skipped":int}
         """
-        self.__thpl.__create_threads(self.__tcount)
+        self.__thpl = ThreadPool()
+        self.__thpl.start_threads()
         with open(lname, 'r') as fd:
             line = fd.readline().strip()
 
@@ -167,9 +183,11 @@ class SKK():
         # Close threads
         self.__thpl.join_queue()
         self.__thpl.kill_threads()
-        logging.info("Files downloaded: " + str(fcount))
-        logging.info("Files failed: " + str(failed) +
+        logging.info("Files downloaded: " + str(self.__fcount))
+        logging.info("Files failed: " + str(self.__failed) +
                      " stored in " + self.__logn)
+        
+        return {"downloaded":self.__fcount, "failed":self.__failed, "skipped":self.__skipped}
 
 
     def __get_content_links(self, url: str, skips: int) -> int:
@@ -182,14 +200,39 @@ class SKK():
             url: url to process in format https://chan.sankakucomplex.com/?tags=xxxx
         Returns Number of items processed
         """
+        logging.debug("Getting links from " + url + " with " + str(skips) + " initial skips")
         # Get all image links from the page ###################
-        reqs = requests.get(url, cookies=self.__cookie, headers=headers)
+        done = False
+        while not done:
+            try:
+                reqs = requests.get(url, cookies=self.__cookie, headers=self.__headers)
+                # Keep trying until server responds
+                while reqs.status_code >= 400:
+                    logging.error("HTTP Code " + str(reqs.status_code) + " at " +
+                                url + ", retrying...")
+                    reqs = requests.get(url, cookies=self.__cookie, headers=self.__headers)
+                done = True
+            except(requests.exceptions.Timeout):
+                logging.debug("Requests unasnwered by server, retrying")
+                time.sleep(5)
         acquired = 0
         # Keep trying until server responds
         while reqs.status_code >= 400:
             logging.error("HTTP Code " + str(reqs.status_code) + " at " +
                           url + ", retrying...")
-            reqs = requests.get(url,  cookies=self.__cookie, headers=headers)
+            done = False
+            while not done:
+                try:
+                    reqs = requests.get(url, cookies=self.__cookie, headers=self.__headers)
+                    # Keep trying until server responds
+                    while reqs.status_code >= 400:
+                        logging.error("HTTP Code " + str(reqs.status_code) + " at " +
+                                    url + ", retrying...")
+                        reqs = requests.get(url, cookies=self.__cookie, headers=self.__headers)
+                        done = True
+                except(requests.exceptions.Timeout):
+                    logging.debug("Requests unasnwered by server, retrying")
+                    time.sleep(5)
 
         # Parse html for links
         soup = BeautifulSoup(reqs.text, 'html.parser')
@@ -205,11 +248,13 @@ class SKK():
                 elif '/post/show/' in src:
                     prev = src
                     self.__thpl.enqueue(
-                        (self.__process_content, (POST_PREFIX + src,)))
+                        (self.__process_content, (self.__POST_PREFIX + src,)))
                     acquired += 1
 
         if prev:
             self.__lastAddedID = self.__sankaku_postid_strip(prev)
+        
+        time.sleep(3)
         return acquired
 
     def __process_container(self, initial_skips) -> None:
@@ -222,18 +267,15 @@ class SKK():
         """
         assert(self.__url)
         paritionedURL = self.__convert_link(self.__url)    # Paritioned link
-        oldSz = 0
         # First link only one with 4 skips
-        newSz = self.__get_content_links(
-            paritionedURL[0] + paritionedURL[2], initial_skips)
+        processed = self.__get_content_links(self.__url + '&page=1', initial_skips)
 
         # Loop until queue is no longer growing
-        while(oldSz != newSz):
+        while(processed > 0):
             # Get next page and process it
-            oldSz = newSz
-            newSz = self.__get_content_links(
+            processed = self.__get_content_links(
                 paritionedURL[0] + paritionedURL[1] + self.__lastAddedID + paritionedURL[2], 1)
-            logging.debug("Current Download QSize: " + str(newSz))
+            logging.debug("Current qsize: " + str(self.__thpl.get_qsize()))
 
     def __process_container_in_segments(self, initial_skips: int) -> None:
         """
@@ -294,37 +336,43 @@ class SKK():
         """
 
         # Get HTML
-        reqs = requests.get(url, cookies=self.__cookie, headers=headers)
-
-        # Keep trying until server responds
-        while reqs.status_code >= 400:
-            logging.error("HTTP Code " + str(reqs.status_code) + " at " +
-                          url + ", retrying...")
-            reqs = requests.get(url, headers=headers)
+        done = False
+        while not done:
+            try:
+                reqs = requests.get(url, cookies=self.__cookie, headers=self.__headers)
+                        # Keep trying until server responds
+                while reqs.status_code >= 400:
+                    logging.error("HTTP Code " + str(reqs.status_code) + " at " +
+                                url + ", retrying...")
+                    reqs = requests.get(url, cookies=self.__cookie, headers=self.__headers)
+                done = True
+            except(requests.exceptions.Timeout):
+                logging.debug("Requests unasnwered by server, retrying")
+                time.sleep(5)
 
         # Check if is video
         soup = BeautifulSoup(reqs.text, 'html.parser')
         imgLinks = soup.find("video", {"id": "image"})
 
         if imgLinks:
-            return DATA_PREFIX + imgLinks.get('src')
+            return self.__DATA_PREFIX + imgLinks.get('src')
 
         # Check if is flash
         imgLinks = soup.find("embed")
 
         if imgLinks:
-            return DATA_PREFIX + imgLinks.get('src')
+            return self.__DATA_PREFIX + imgLinks.get('src')
 
         # Check if is image
         imgLinks = soup.find("a", class_="sample")
 
         if imgLinks:
-            return DATA_PREFIX + imgLinks.get('href')
+            return self.__DATA_PREFIX + imgLinks.get('href')
 
         # Check if is gif
         imgLinks = soup.find("a", {"id": "image-link"})
         if(imgLinks):
-            return DATA_PREFIX + imgLinks.find("img").get('src')
+            return self.__DATA_PREFIX + imgLinks.find("img").get('src')
 
         raise UnknownURLTypeException
 
@@ -356,26 +404,41 @@ class SKK():
             return ".mov"
         return None
 
-    def __process_content(self, url: str):
+    def __process_content(self, url: str) -> int:
         """
         Downloads either video, flash, or image content at url
 
         If a download error occurs due to server/latency issues,
-        download will be terminated and file is written to log
+        download will be terminated and file is written to log.
 
+        There are several possible postconditions:
+        -1) Url's src has >=400 error, failed incremented and program returns
+        -2) Url's src cannot be interpreted, failed incremented and program returns
+        -3) Url's src incomplete download, download from left off point and out of cycles, increment failed and return
+        0) Url's src successfully downloaded, downloaded incremented and return
+        1) Url's src on blacklist, skipped incremented and returned
+        2) Url's src file matches local file name and size, skipped incremented and returned
+
+        0 == Success
+        < 0 == Failure
+        > 0 == Skipped 
         Param:
             url: Sankaku post url to download content from in the format
                     https://chan.sankakucomplex.com/post/show/xxxxxxxx
+        Return: Code associated with postconditions. None if internal error occurs
         """
-        global failed
-        global fcount
         # Check if the file is on the blacklist ###########################
         postid = self.__sankaku_postid_strip(url)
+
+        # If is in blacklist, register it and return 
         if self.__blacklist and self.__blacklist.hashtable_exist_by_key(postid) != -1:
+            self.__skipped_mutex.acquire()
+            self.__skipped += 1
+            self.__skipped_mutex.release()
             logging.debug("File on blacklist already " + postid)
             self.__write_to_file(
                 fname=self.__blackn, line=postid + '\n', mutex=self.__blackn_mutex, quiet=True)
-            return
+            return 1
 
         # Get src on page ##################################################
         try:
@@ -385,6 +448,7 @@ class SKK():
             self.__write_to_file(fname=self.__logn, line="BAD URL:" +
                                  url + "\n", quiet=False, mutex=self.__logn_mutex)
             return
+            
         # Download it
         # Get file size ######################################################
         r = None
@@ -393,17 +457,19 @@ class SKK():
                 # Get download size
                 logging.debug("Getting head of " + src)
                 r = requests.get(src, cookies=self.__cookie,
-                                 headers=headers, stream=True)
+                                 headers=self.__headers, stream=True)
+                
+                # If file could not be retrieved, server does not have the file for some reason
                 if r.status_code >= 400:
-                    logging.error(
+                    logging.debug(
                         "Encountered server error, writing to log " + url)
                     self.__write_to_file(
                         fname=self.__logn, line=url + "\n", quiet=False, mutex=self.__logn_mutex)
-                    failed_mutex.acquire()
-                    failed += 1
-                    failed_mutex.release()
-                    return
-            except(requests.exceptions.ConnectTimeout):
+                    self.__failed_mutex.acquire()
+                    self.__failed += 1
+                    self.__failed_mutex.release()
+                    return -1
+            except(requests.exceptions.Timeout):
                 logging.debug("Connection request unanswered, retrying")
         fullsize = r.headers.get('Content-Length')
 
@@ -428,6 +494,8 @@ class SKK():
                             bar_format=" (" + str(self.__thpl.get_qsize()) + ")->" +
                         fname + '[{bar}{r_bar}]',
                             unit_divisor=int(self.__chunksz)) as bar:
+
+                        # Download is in chunks
                         for chunk in r.iter_content(chunk_size=self.__chunksz):
                             sz = fd.write(chunk)
                             bar.update(sz)
@@ -436,15 +504,26 @@ class SKK():
                             # Check max cycles, if detected, register failure and delete file
                             cycles += 1
                             if(cycles == self.__max_retries):
-                                logging.info("Max download cycles reached, download rejected: " + url)
+                                logging.debug("Max download cycles reached, download rejected: " + url)
                                 bar.close()
                                 r.close()
                                 self.__write_to_file(
                                 fname=self.__logn, line=src + "\n", quiet=False, mutex=self.__logn_mutex)
-                                failed_mutex.acquire()
-                                failed += 1
-                                failed_mutex.release()
-                                return
+                                self.__failed_mutex.acquire()
+                                self.__failed += 1
+                                self.__failed_mutex.release()
+                                return -3
+                        # If the server refuses to send back a chunk, it still counts as a cycle
+                        else:
+                            cycles += 1
+                            if(cycles == self.__max_retries):
+                                logging.info("Max download cycles reached, download rejected: " + url)
+                                self.__write_to_file(
+                                fname=self.__logn, line=url + "\n", quiet=False, mutex=self.__logn_mutex)
+                                self.__failed_mutex.acquire()
+                                self.__failed += 1
+                                self.__failed_mutex.release()
+                                return -3
 
                         time.sleep(1)
                         bar.clear()
@@ -455,25 +534,18 @@ class SKK():
                         done = True
 
                         # Increment count
-                        fcount_mutex.acquire()
-                        fcount += 1
-                        fcount_mutex.release()
+                        self.__fcount_mutex.acquire()
+                        self.__fcount += 1
+                        self.__fcount_mutex.release()
 
                         # Write to blacklist
                         if(self.__blackn):
                             self.__write_to_file(
                                 fname=self.__blackn, line=postid + '\n', mutex=self.__blackn_mutex, quiet=True)
+                        
+                        return 0
+                    # If file is too small, resume download from where the file left off
                     else:
-                        # Check max cycles, if detected, register failure and delete file
-                        cycles += 1
-                        if(cycles == self.__max_retries):
-                            logging.info("Max download cycles reached, download rejected: " + url)
-                            self.__write_to_file(
-                            fname=self.__logn, line=url + "\n", quiet=False, mutex=self.__logn_mutex)
-                            failed_mutex.acquire()
-                            failed += 1
-                            failed_mutex.release()
-                            return
                         logging.debug("Incomplete download, will restart download (" +
                                       src + ") Dcount=" + str(cycles) + "-> " + str(os.stat(fname).st_size) + " / " + fullsize)
                         header = {'User-agent': 'Mozilla/5.0 (Windows NT 5.1; rv:43.0) Gecko/20100101 Firefox/43.0',
@@ -485,15 +557,21 @@ class SKK():
                     logging.debug(
                         "Chunked encoding error has occured, server has likely disconnected, download has restarted")
                     r = requests.get(src, cookies=self.__cookie,
-                                     headers=headers, stream=True)
+                                     headers=self.__headers, stream=True)
+        # For duplicate files not in blacklist, add them to one and register it
         else:
 
             logging.debug("Skipping duplicate file: " + fname)
+            self.__skipped_mutex.acquire()
+            self.__skipped += 1
+            self.__skipped_mutex.release()
+
             # Write to blacklist
             if self.__blackn:
                 self.__write_to_file(
                     fname=self.__blackn, line=postid + '\n', mutex=self.__blackn_mutex, quiet=True)
-
+            return 2
+        return None
 
     def __write_to_file(self, fname: str, line: str, mutex, quiet: bool) -> None:
         """
@@ -537,7 +615,7 @@ def help() -> None:
     logging.info(
         "-c <#> : Adjust download chunk size in bytes (Default is 64M)")
     logging.info(
-        "-w <#> : Adjust download wait time in seconds (Default is 0 seconds)")
+        "-b <path> : Set path to blacklist file")
     logging.info(
         "-db : Turn on debug output")
     logging.info("-dbv : Turn on debug output and write output to file")
@@ -558,8 +636,8 @@ def main() -> None:
     cookie = None
     url = None
     posts = None
-    debug = False
-    debugV = False
+    blacklist = None
+
     if len(sys.argv) > 1:
         pointer = 1
         while(len(sys.argv) > pointer):
@@ -571,10 +649,10 @@ def main() -> None:
                 folder = sys.argv[pointer + 1]
                 pointer += 2
                 logging.info("FOLDER -> " + folder)
-            elif sys.argv[pointer] == '-db':
-                debug = True
-                pointer += 1
-                logging.info("Debug mode turned on")
+            elif sys.argv[pointer] == '-b' and len(sys.argv) >= pointer:
+                blacklist = sys.argv[pointer + 1]
+                pointer += 2
+                logging.info("BLACKLIST -> " + blacklist)
             elif sys.argv[pointer] == '-f' and len(sys.argv) >= pointer:
                 posts = sys.argv[pointer + 1]
                 pointer += 2
@@ -596,7 +674,7 @@ def main() -> None:
 
     if folder:
         downloader = SKK(tcount=tcount, chunksz=chunksz, cookie=cookie, download_path=folder,
-                         blacklist='C:/Users/chenj/Downloads/SKK-Downloader-v2/src/logs/Blacklist - 8193.txt', max_retries=None)
+                         blacklist=blacklist, max_retries=None)
 
         if posts:
             downloader.run_post_links(posts)
