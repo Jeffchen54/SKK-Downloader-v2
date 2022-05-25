@@ -2,7 +2,7 @@
 This is the improved version of SKK Downloader described here here: https://github.com/Jeffchen54/SKK-Downloader
 
 Currently, SKK Downloader is very early in development. It is only partially functional and a working version
-will be published in releases when it is completed. 
+will be published in releases when it is completed. Functionality is not guaranteed until version 1.0!
 
 SKK Downloader v2 is a simple web scraping based downloader offering the following features:
 - Downloading entire tags without any limit (>2000 limit imposed by v1)
