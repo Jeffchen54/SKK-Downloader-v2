@@ -20,6 +20,7 @@ SKK Downloader v2 is a simple web scraping based downloader offering the followi
 ## Requirements:
 - Windows 10
 - Python 3.10
+- bs4, requests, and tqdm python libraries.
 
 ## Invocation: 
 -j <textfile.txt> : REQUIRED - Sankaku cookie
