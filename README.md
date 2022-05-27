@@ -17,6 +17,10 @@ SKK Downloader v2 is a simple web scraping based downloader offering the followi
 
 ** 403 Errors, unable to load, timeouts...
 
+## Requirements:
+- Windows 10
+- Python 3.10
+
 ## Invocation: 
 -j <textfile.txt> : REQUIRED - Sankaku cookie
 
