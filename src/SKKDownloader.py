@@ -13,6 +13,7 @@ from HashTable import HashTable
 from HashTable import KVPair
 from Threadpool import ThreadPool
 from Threadpool import tname
+import dirs
 """
 Redesign of ImageOpener without the use of Selenium and HandyImage
 """
@@ -52,8 +53,8 @@ class SKK():
     # Threading Variables #####################################################
     __POST_PREFIX = 'https://chan.sankakucomplex.com/'
     __DATA_PREFIX = 'https:'
-    __LOG_PATH = sys.path[0] + r'/logs/'
-    __BLACK_PATH =  sys.path[0] + r'/logs/'
+    __LOG_PATH = dirs.convert_win_to_py_path(sys.path[0]) + r'/logs/'
+    __BLACK_PATH =  dirs.convert_win_to_py_path(sys.path[0]) + r'/logs/'
     __fcount = 0  # Used to count and rename content
     __fcount_mutex = Lock()   # Mutex for fcount
     __failed = 0
@@ -120,6 +121,14 @@ class SKK():
         else:
             self.__chunksz = 1024 * 1024 * 64
 
+        # Generate log path if it does not exists
+        if not os.path.exists(self.__LOG_PATH):
+            os.makedirs(self.__LOG_PATH)
+        
+        if not os.path.exists(self.__BLACK_PATH):
+            os.makedirs(self.__BLACK_PATH)
+
+
     def set_url(self, url: str | None) -> None:
         """
         Sets download url, if url is None or incorrect, ask user for the url.
@@ -172,13 +181,15 @@ class SKK():
             lname: file containing sankaku post links
         Return: dict in the structure {"downloaded":int, "failed":int, "skipped":int}
         """
-        self.__thpl = ThreadPool()
+        self.__thpl = ThreadPool(self.__tcount)
         self.__thpl.start_threads()
         with open(lname, 'r') as fd:
-            line = fd.readline().strip()
-
-            if(len(line) > 0):
-                self.__thpl.enqueue((self.__process_content, (line,)))
+            lines = fd.readlines()
+            
+            for line in lines:
+                line = line.strip()
+                if(len(line) > 0):
+                    self.__thpl.enqueue((self.__process_content, (line,)))
 
         # Close threads
         self.__thpl.join_queue()
@@ -616,9 +627,6 @@ def help() -> None:
         "-c <#> : Adjust download chunk size in bytes (Default is 64M)")
     logging.info(
         "-b <path> : Set path to blacklist file")
-    logging.info(
-        "-db : Turn on debug output")
-    logging.info("-dbv : Turn on debug output and write output to file")
     logging.info("-h : Help")
     logging.info("-u <url> : Set download url")
     logging.info("-t <#> : Change download thread count (default is 1)")
@@ -642,20 +650,44 @@ def main() -> None:
         pointer = 1
         while(len(sys.argv) > pointer):
             if sys.argv[pointer] == '-j':
-                with open(sys.argv[pointer + 1], 'r') as fd:
+                cookiepath = sys.argv[pointer + 1]
+                cookiepath = dirs.convert_win_to_py_path(cookiepath)
+                cookiepath = dirs.replace_dots_to_py_path(cookiepath)
+                if not os.path.exists(cookiepath):
+                    logging.error("Cookie file does not exists -> " + cookiepath)
+                    exit()
+                with open(cookiepath, 'r') as fd:
                     cookie = {'cookie': fd.read()}
                 pointer += 2
+                logging.info("COOKIE -> " + str(cookie))
             elif sys.argv[pointer] == '-d' and len(sys.argv) >= pointer:
                 folder = sys.argv[pointer + 1]
+                folder = dirs.convert_win_to_py_path(folder)
+                folder = dirs.replace_dots_to_py_path(folder)
+                if not os.path.exists(folder):
+                    logging.error("Folder does not exists -> " + folder)
+                    exit()
+
                 pointer += 2
                 logging.info("FOLDER -> " + folder)
             elif sys.argv[pointer] == '-b' and len(sys.argv) >= pointer:
                 blacklist = sys.argv[pointer + 1]
+                blacklist = dirs.convert_win_to_py_path(blacklist)
+                blacklist = dirs.replace_dots_to_py_path(blacklist)
+                if not os.path.exists(blacklist):
+                    logging.error("Blacklist does not exists -> " + blacklist)
+                    exit()
                 pointer += 2
                 logging.info("BLACKLIST -> " + blacklist)
             elif sys.argv[pointer] == '-f' and len(sys.argv) >= pointer:
                 posts = sys.argv[pointer + 1]
+                posts = dirs.convert_win_to_py_path(posts)
+                posts = dirs.replace_dots_to_py_path(posts)
+                if not os.path.exists(posts):
+                    logging.error("Post file does not exists -> " + posts)
+                    exit()
                 pointer += 2
+            
                 logging.info("URLTXT -> " + posts)
             elif sys.argv[pointer] == '-u' and len(sys.argv) >= pointer:
                 url = sys.argv[pointer + 1]
