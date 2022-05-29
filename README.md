@@ -17,6 +17,11 @@ SKK Downloader v2 is a simple web scraping based downloader offering the followi
 
 ** 403 Errors, unable to load, timeouts...
 
+## Requirements:
+- Windows 10
+- Python 3.10
+- bs4, requests, and tqdm python libraries.
+
 ## Invocation: 
 -j <textfile.txt> : REQUIRED - Sankaku cookie
 
@@ -100,6 +105,8 @@ SKK Downloader v2 is a simple web scraping based downloader offering the followi
   
 ## Special notices
   - Progress bar may seem to hang. This is either Sankaku streaming continuous data slowly or a slow connection. 
+  - Slow down pages manifest as "ERROR:root:HTTP Code 429 at https://chan.sankakucomplex.com//post/show/xxxxxxx, retrying..." on the console,
+  usually, this resolves itself naturally. If it does not, reduce the number of threads (1 is recommended) or use a VPN.
 
 ## Bugs:
 - Download progress bar does not show file size correctly
