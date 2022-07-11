@@ -4,6 +4,11 @@ This is the improved version of SKK Downloader described here here: https://gith
 Currently, SKK Downloader is very early in development. It is only partially functional and a working version
 will be published in releases when it is completed. Functionality is not guaranteed until version 1.0!
 
+Currently, Sankaku complex is in a very rocky state (many posts contain missing images due to internal server issues
+and videos that do not stream correctly). As a result, the program will not be updated until improvements are made 
+to the website. SKK downloader does work correctly but broken files may be downloaded due to Sankaku's server issues. 
+
+
 SKK Downloader v2 is a simple web scraping based downloader offering the following features:
 - Downloading entire tags without any limit (>2000 limit imposed by v1)
 - Automatic retry for "Please slow down" messages (v1 had a less efficient approach)
